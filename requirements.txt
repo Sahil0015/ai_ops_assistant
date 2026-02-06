@@ -1,0 +1,6 @@
+agno==2.4.8
+groq==1.0.0
+openai==2.17.0
+requests==2.32.5
+python-dotenv==1.2.1
+streamlit==1.54.0
