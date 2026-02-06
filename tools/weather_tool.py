@@ -2,10 +2,11 @@
 
 import os
 from tools.retry_utils import safe_api_call
+from tools.cache_manager import cache_manager
 
 
-def get_weather(city: str) -> str:
-    """Get current weather for a city with retry on API failure."""
+def _get_weather_uncached(city: str) -> str:
+    """Internal function to get weather without caching."""
     api_key = os.getenv("WEATHER_API_KEY")
     if not api_key:
         return "Error: WEATHER_API_KEY not set."
@@ -36,3 +37,8 @@ def get_weather(city: str) -> str:
         )
     except Exception as e:
         return f"Error parsing weather for '{city}': {e}"
+
+
+def get_weather(city: str) -> str:
+    """Get current weather for a city with caching and retry on API failure."""
+    return cache_manager.cache_call(_get_weather_uncached, "weather", city)

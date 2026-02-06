@@ -56,11 +56,14 @@ User Query
 │   └── responder_agent.py   # Responder Agent — final response formatting
 ├── llm/
 │   ├── client.py            # Groq model configuration
-│   └── prompt.py            # System prompts for all agents
+│   ├── prompt.py            # System prompts for all agents
+│   └── cost_tracker.py      # LLM usage cost tracking
 └── tools/
     ├── weather_tool.py      # Weather data (OpenWeatherMap API)
     ├── news_tool.py         # News headlines (NewsData.io API)
-    └── github_tool.py       # GitHub data (GitHub REST API)
+    ├── github_tool.py       # GitHub data (GitHub REST API)
+    ├── retry_utils.py       # API retry logic with exponential backoff
+    └── cache_manager.py     # Response caching with TTL
 ```
 
 ## Setup
@@ -283,11 +286,20 @@ deactivate
 
 🔄 **Automatic Retry**: Verifier agent ensures response quality with up to 2 retry attempts
 
+� **Smart Caching**: API responses are cached with TTL to reduce redundant calls and improve response times
+  - Weather: 30 minutes
+  - News: 10 minutes
+  - GitHub: 1 hour
+
+💰 **Cost Tracking**: Real-time tracking of LLM token usage and estimated costs per agent and session
+
 🛠️ **Multi-Tool Support**: Combine multiple tools in a single query
 
 📚 **README Enrichment**: GitHub user profiles and repositories automatically include README content when available, providing richer context about projects and developers
 
 🎯 **Smart Planning**: Planner agent analyzes queries and creates optimal execution strategies
+
+⚡ **Graceful Degradation**: Partial data fallback when verification fails after retries
 
 ## Tools
 
@@ -318,7 +330,45 @@ The GitHub integration provides individual functions:
 
 **Multi-Tool Queries:**
 - `"What's the weather in London and latest news about AI?"` — Weather + News
-- `"News on AI startups and trending AI repos on GitHub"` — News + GitHub search
+- `"News on AI star
+
+## Performance Optimizations
+
+### 🗄️ Response Caching
+
+API responses are automatically cached to reduce redundant calls and improve response times:
+
+- **Weather data**: Cached for 30 minutes
+- **News articles**: Cached for 10 minutes
+- **GitHub data**: Cached for 1 hour
+
+**Cache Statistics** (visible in sidebar):
+- Cache size and hit/miss counts
+- Hit rate percentage
+- Clear cache button for fresh data
+
+**How it works**: The system generates a unique cache key from the function name and parameters. On subsequent identical requests, cached data is returned if still valid (TTL not expired).
+
+### 💸 Cost Tracking
+
+Real-time token usage and cost estimation for all LLM API calls:
+
+**Groq Pricing** (per 1M tokens):
+- **LLaMA 3.3 70B**: $0.59 input / $0.79 output
+- **Qwen3 32B**: $0.35 input / $0.44 output
+
+**Tracked Metrics** (visible in sidebar):
+- Total session cost in USD
+- Total tokens used
+- Per-agent breakdown (calls, tokens, cost)
+
+**Features**:
+- Session tracking with automatic cost calculation
+- Agent-level breakdown for optimization insights
+- Reset session to start fresh tracking
+- Estimated costs (based on character count approximation)
+
+**Note**: Token counts are estimated using a 4:1 character-to-token ratio. Actual costs may vary slightly.tups and trending AI repos on GitHub"` — News + GitHub search
 
 ## Tech Stack
 

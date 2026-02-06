@@ -4,6 +4,7 @@ GitHub Tool - Fetch GitHub user profiles, search users/repos, and get repository
 
 import os
 from tools.retry_utils import safe_api_call
+from tools.cache_manager import cache_manager
 
 
 def _get_headers() -> dict:
@@ -30,8 +31,8 @@ def _fetch_readme(owner: str, repo: str, max_length: int = 1500) -> str | None:
     return content
 
 
-def get_github_user(username: str) -> str:
-    """Get the GitHub profile information for a given username."""
+def _get_github_user_uncached(username: str) -> str:
+    """Internal function to get GitHub user without caching."""
     url = f"https://api.github.com/users/{username}"
     response, error = safe_api_call(url, headers=_get_headers())
     
@@ -60,8 +61,13 @@ def get_github_user(username: str) -> str:
     return profile
 
 
-def search_github_users(query: str, max_results: int = 5) -> str:
-    """Search for GitHub users matching a query."""
+def get_github_user(username: str) -> str:
+    """Get the GitHub profile information for a given username with caching."""
+    return cache_manager.cache_call(_get_github_user_uncached, "github", username)
+
+
+def _search_github_users_uncached(query: str, max_results: int = 5) -> str:
+    """Internal function to search GitHub users without caching."""
     max_results = min(max(1, max_results), 10)
     url = f"https://api.github.com/search/users?q={query}&per_page={max_results}"
     response, error = safe_api_call(url, headers=_get_headers())
@@ -80,8 +86,13 @@ def search_github_users(query: str, max_results: int = 5) -> str:
     return "\n".join(result_lines)
 
 
-def search_github_repos(query: str, max_results: int = 5) -> str:
-    """Search for GitHub repositories matching a query."""
+def search_github_users(query: str, max_results: int = 5) -> str:
+    """Search for GitHub users matching a query with caching."""
+    return cache_manager.cache_call(_search_github_users_uncached, "github", query, max_results)
+
+
+def _search_github_repos_uncached(query: str, max_results: int = 5) -> str:
+    """Internal function to search GitHub repos without caching."""
     max_results = min(max(1, max_results), 10)
     url = f"https://api.github.com/search/repositories?q={query}&sort=stars&order=desc&per_page={max_results}"
     response, error = safe_api_call(url, headers=_get_headers())
@@ -104,8 +115,13 @@ def search_github_repos(query: str, max_results: int = 5) -> str:
     return "\n".join(result_lines)
 
 
-def get_github_repo(owner: str, repo: str) -> str:
-    """Get detailed information about a specific GitHub repository."""
+def search_github_repos(query: str, max_results: int = 5) -> str:
+    """Search for GitHub repositories matching a query with caching."""
+    return cache_manager.cache_call(_search_github_repos_uncached, "github", query, max_results)
+
+
+def _get_github_repo_uncached(owner: str, repo: str) -> str:
+    """Internal function to get GitHub repo without caching."""
     url = f"https://api.github.com/repos/{owner}/{repo}"
     response, error = safe_api_call(url, headers=_get_headers())
     
@@ -137,3 +153,9 @@ def get_github_repo(owner: str, repo: str) -> str:
     if readme:
         repo_info += f"\n\n--- Repository README ---\n{readme}"
     return repo_info
+
+
+def get_github_repo(owner: str, repo: str) -> str:
+    """Get detailed information about a specific GitHub repository with caching."""
+    return cache_manager.cache_call(_get_github_repo_uncached, "github", owner, repo)
+

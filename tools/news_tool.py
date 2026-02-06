@@ -2,10 +2,11 @@
 
 import os
 from tools.retry_utils import safe_api_call
+from tools.cache_manager import cache_manager
 
 
-def get_news(topic: str) -> str:
-    """Get latest news headlines on a topic with retry on API failure."""
+def _get_news_uncached(topic: str) -> str:
+    """Internal function to get news without caching."""
     api_key = os.getenv("NEWS_API_KEY")
     if not api_key:
         return "Error: NEWS_API_KEY not set."
@@ -43,3 +44,8 @@ def get_news(topic: str) -> str:
         return f"Top News for '{topic}':\n" + "\n".join(headlines)
     except Exception as e:
         return f"Error parsing news for '{topic}': {e}"
+
+
+def get_news(topic: str) -> str:
+    """Get latest news headlines on a topic with caching and retry on API failure."""
+    return cache_manager.cache_call(_get_news_uncached, "news", topic)

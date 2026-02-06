@@ -24,6 +24,8 @@ from agents.planner_agent import create_planner_agent
 from agents.executor_agent import create_executor_agent
 from agents.verifier_agent import create_verifier_agent
 from agents.responder_agent import create_responder_agent
+from tools.cache_manager import cache_manager
+from llm.cost_tracker import cost_tracker
 
 MAX_RETRIES = 2
 
@@ -149,6 +151,18 @@ def get_partial_data(executor_result: str, query: str) -> str:
     )
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count (rough: 1 token ≈ 4 characters)."""
+    return len(text) // 4
+
+
+def track_agent_cost(agent_name: str, prompt: str, response: str, model: str = "llama-3.3-70b-versatile"):
+    """Estimate and track cost for an agent call."""
+    input_tokens = estimate_tokens(prompt)
+    output_tokens = estimate_tokens(response)
+    cost_tracker.track(agent_name, model, input_tokens, output_tokens)
+
+
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
 
 st.set_page_config(
@@ -196,6 +210,47 @@ with st.sidebar:
     | 📰 News | Latest news on any topic |
     | 🐙 GitHub | User profiles, repositories |
     """)
+
+    st.divider()
+    
+    # Cache Stats
+    st.header("💾 Cache Statistics")
+    cache_stats = cache_manager.get_stats()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Cache Size", cache_stats["size"])
+        st.metric("Hit Rate", f"{cache_stats['hit_rate']:.1f}%")
+    with col2:
+        st.metric("Hits", cache_stats["hits"])
+        st.metric("Misses", cache_stats["misses"])
+    
+    if st.button("🗑️ Clear Cache", use_container_width=True):
+        cache_manager.clear()
+        st.success("Cache cleared!")
+        st.rerun()
+    
+    st.divider()
+    
+    # Cost Tracking
+    st.header("💰 Cost Tracking")
+    session_cost = cost_tracker.get_session_cost()
+    session_tokens = cost_tracker.get_session_tokens()
+    st.metric("Session Cost", f"${session_cost:.6f}")
+    st.metric("Session Tokens", f"{session_tokens:,}")
+    
+    with st.expander("💵 Agent Breakdown", expanded=False):
+        breakdown = cost_tracker.get_agent_breakdown()
+        for agent, data in breakdown.items():
+            if data["calls"] > 0:
+                st.text(f"{agent}:")
+                st.text(f"  Calls: {data['calls']}")
+                st.text(f"  Tokens: {data['input_tokens'] + data['output_tokens']:,}")
+                st.text(f"  Cost: ${data['cost']:.6f}")
+    
+    if st.button("🔄 Reset Session", use_container_width=True):
+        cost_tracker.reset_session()
+        st.success("Session reset!")
+        st.rerun()
 
     st.divider()
     st.header("💡 Example Queries")
@@ -266,6 +321,10 @@ if should_run and query:
             plan_json = extract_json(plan_raw)
             plan_display = format_plan(plan_json) if plan_json else plan_raw
             plan = plan_raw  # Keep raw for executor
+            
+            # Track cost
+            track_agent_cost("Planner Agent", query, plan_raw)
+            
             elapsed = time.time() - start
             status.update(label=f"📋 Step 1/4 — Planner Agent ({elapsed:.1f}s)", state="complete")
             st.markdown(plan_display)
@@ -299,6 +358,10 @@ if should_run and query:
                 executor_response = executor.run(executor_input)
                 result = executor_response.content
                 raw_executor = executor_response
+                
+                # Track cost
+                track_agent_cost("Executor Agent", executor_input, result, "qwen/qwen3-32b")
+                
                 elapsed = time.time() - start
                 status.update(label=f"⚡ Step 2/4 — Executor Agent ({elapsed:.1f}s){retry_label}", state="complete")
                 st.markdown(result)
@@ -322,6 +385,10 @@ if should_run and query:
                 verification_raw = verifier_response.content
                 verification_passed, v_data = parse_verification(verification_raw)
                 verification_display = format_verification(v_data)
+                
+                # Track cost
+                track_agent_cost("Verifier Agent", verifier_input, verification_raw)
+                
                 elapsed = time.time() - start
                 
                 if verification_passed:
@@ -363,6 +430,10 @@ if should_run and query:
             )
             responder_response = responder.run(responder_input)
             final_response = responder_response.content
+            
+            # Track cost
+            track_agent_cost("Responder Agent", responder_input, final_response)
+            
             elapsed = time.time() - start
             status.update(label=f"💬 Step 4/4 — Responder Agent ({elapsed:.1f}s)", state="complete")
             st.markdown(final_response)
