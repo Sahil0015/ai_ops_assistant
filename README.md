@@ -1,6 +1,6 @@
 # Multi-Agent AI System
 
-A multi-agent AI system built with the **Agno** framework and powered by **Groq** (LLaMA 3.3 70B / Qwen3 32B).
+A multi-agent AI system built with the **Agno** framework and powered by **Groq** (LLaMA 3.3 70B).
 
 > **Assignment Reference**: See `GenAI_Intern_24h_Assignment (1).pdf` for the original requirements.
 
@@ -100,7 +100,7 @@ cp .env.example .env
 - Groq: https://console.groq.com/keys
 - OpenWeatherMap: https://openweathermap.org/api
 - NewsData.io: https://newsdata.io/
-- GitHub: https://github.com/settings/tokens (optional, for higher rate limits)
+- GitHub: https://github.com/settings/tokens
 
 ### 4. Run
 
@@ -116,7 +116,7 @@ The app will open at http://localhost:8501. Click on example queries in the side
 |------|-------------|-----|---------------|
 | **get_weather** | Current weather for any city | OpenWeatherMap | Yes (`WEATHER_API_KEY`) |
 | **get_news** | Latest headlines by topic | NewsData.io | Yes (`NEWS_API_KEY`) |
-| **github_tool** | User profiles, repo search, repo info | GitHub REST API | Optional (`GITHUB_API_KEY`) |
+| **github_tool** | User profiles, repo search, repo info | GitHub REST API | YES (`GITHUB_API_KEY`) |
 
 ### GitHub Tool Actions
 
