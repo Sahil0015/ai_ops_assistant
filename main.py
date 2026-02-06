@@ -7,14 +7,13 @@ This system uses four specialized agents in a sequential pipeline:
   3. Verifier Agent  - Reviews the response for quality and completeness.
   4. Responder Agent - Formats a polished final response for the user.
 
-Pipeline: User Query -> Planner -> Executor -> Verifier (with retry) -> Responder -> Final Response
-
-The Verifier checks if the response passes quality criteria. If it fails,
-the Executor retries up to 2 times before passing to the Responder.
+Pipeline: User Query -> Planner -> Executor -> Verifier (with retry) -> Final Response
 
 Run: streamlit run main.py
 """
 
+import json
+import re
 import time
 import streamlit as st
 from dotenv import load_dotenv
@@ -26,7 +25,128 @@ from agents.executor_agent import create_executor_agent
 from agents.verifier_agent import create_verifier_agent
 from agents.responder_agent import create_responder_agent
 
-MAX_RETRIES = 2  # Maximum retry attempts for Executor when verification fails
+MAX_RETRIES = 2
+
+
+# ── Helper Functions ─────────────────────────────────────────────────────────
+
+def extract_json(text: str) -> dict | None:
+    """Extract JSON from LLM response (handles markdown code blocks)."""
+    patterns = [r"```json\s*([\s\S]*?)\s*```", r"```\s*([\s\S]*?)\s*```", r"(\{[\s\S]*\})"]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def format_plan(plan_json: dict) -> str:
+    """Format planner JSON output as markdown."""
+    if not isinstance(plan_json, dict):
+        return str(plan_json)
+    lines = []
+    # Handle query_analysis (can be string or dict)
+    qa = plan_json.get("query_analysis")
+    if qa:
+        lines.append("**Query Analysis:**")
+        if isinstance(qa, str):
+            lines.append(f"{qa}")
+        elif isinstance(qa, dict):
+            lines.append(f"- Intent: {qa.get('intent', 'N/A')}")
+        lines.append("")
+    # Handle steps
+    steps = plan_json.get("steps", [])
+    if steps:
+        lines.append("**Execution Steps:**")
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            num = step.get('step_number', step.get('step', '?'))
+            desc = step.get('description', step.get('action', 'Unknown'))
+            tool = step.get('tool', 'N/A')
+            params = step.get('parameters', step.get('input', {}))
+            lines.append(f"{num}. **{desc}**")
+            lines.append(f"   - Tool: `{tool}`")
+            if isinstance(params, dict) and params:
+                lines.append(f"   - Params: {params}")
+    return "\n".join(lines) if lines else str(plan_json)
+
+
+def parse_verification(text: str) -> tuple[bool, dict]:
+    """Parse verifier output. Returns (passed, verification_dict)."""
+    data = extract_json(text)
+    if data and isinstance(data, dict):
+        # Check for overall pass in various formats
+        overall = data.get("overall", "")
+        if isinstance(overall, str) and "pass" in overall.lower():
+            return True, data
+        if isinstance(overall, bool) and overall:
+            return True, data
+        # Check verification sub-object
+        v = data.get("verification", {})
+        if isinstance(v, dict):
+            for key, val in v.items():
+                if isinstance(val, dict) and val.get("status", "").upper() == "FAIL":
+                    return False, data
+            return True, data
+    # Fallback: text-based parsing
+    text_lower = text.lower()
+    passed = "overall" in text_lower and "pass" in text_lower and "fail" not in text_lower.split("overall")[-1][:30]
+    return passed, {"raw": text}
+
+
+def format_verification(v_data: dict) -> str:
+    """Format verification JSON as markdown."""
+    if not isinstance(v_data, dict):
+        return str(v_data)
+    if "raw" in v_data:
+        return v_data["raw"]
+    v = v_data.get("verification", v_data)
+    if not isinstance(v, dict):
+        return str(v_data)
+    lines = ["**Verification Results:**"]
+    for key, val in v.items():
+        if isinstance(val, dict):
+            status = "✅" if val.get("status", "").upper() == "PASS" else "❌"
+            reason = val.get("reason", "")
+            lines.append(f"- {key.replace('_', ' ').title()}: {status} {reason}")
+    overall = v_data.get("overall", "")
+    if overall:
+        lines.append(f"\n**Overall:** {'✅ PASS' if 'pass' in str(overall).lower() else '❌ FAIL'}")
+    suggestions = v_data.get("suggestions", [])
+    if suggestions:
+        lines.append(f"\n**Suggestions:** {', '.join(suggestions)}")
+    return "\n".join(lines)
+
+
+def run_with_retry(agent, prompt: str, max_attempts: int = 3, parse_json: bool = False):
+    """Run agent with retry on failure. Returns (content, raw_response, error)."""
+    for attempt in range(max_attempts):
+        try:
+            response = agent.run(prompt)
+            content = response.content
+            if parse_json:
+                data = extract_json(content)
+                if data:
+                    return data, response, None
+            return content, response, None
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                return None, None, str(e)
+            time.sleep(0.5 * (attempt + 1))
+    return None, None, "Max retries exceeded"
+
+
+def get_partial_data(executor_result: str, query: str) -> str:
+    """Graceful fallback: return partial data with warning if verification fails."""
+    return (
+        f"⚠️ **Note:** Some data may be incomplete or could not be fully verified.\n\n"
+        f"**Available Information:**\n{executor_result}\n\n"
+        f"*Based on query: {query}*"
+    )
 
 
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
@@ -142,13 +262,15 @@ if should_run and query:
         start = time.time()
         try:
             planner_response = planner.run(query)
-            plan = planner_response.content
-            raw_planner = planner_response
+            plan_raw = planner_response.content
+            plan_json = extract_json(plan_raw)
+            plan_display = format_plan(plan_json) if plan_json else plan_raw
+            plan = plan_raw  # Keep raw for executor
             elapsed = time.time() - start
             status.update(label=f"📋 Step 1/4 — Planner Agent ({elapsed:.1f}s)", state="complete")
-            st.markdown(plan)
+            st.markdown(plan_display)
             with st.expander("🔍 View Raw Planner Output", expanded=False):
-                st.code(repr(raw_planner), language="python")
+                st.code(plan_raw, language="json" if plan_json else "text")
         except Exception as e:
             status.update(label="📋 Step 1/4 — Planner Agent (FAILED)", state="error")
             st.error(f"Planner error: {e}")
@@ -197,21 +319,19 @@ if should_run and query:
                     f"Please verify the response quality and completeness."
                 )
                 verifier_response = verifier.run(verifier_input)
-                verification = verifier_response.content
-                raw_verifier = verifier_response
+                verification_raw = verifier_response.content
+                verification_passed, v_data = parse_verification(verification_raw)
+                verification_display = format_verification(v_data)
                 elapsed = time.time() - start
                 
-                # Check if verification passed (flexible matching)
-                verification_lower = verification.lower()
-                if "overall: pass" in verification_lower or "overall:pass" in verification_lower or ("overall" in verification_lower and "pass" in verification_lower.split("overall")[-1][:20]):
-                    verification_passed = True
+                if verification_passed:
                     status.update(label=f"🔍 Step 3/4 — Verifier Agent ({elapsed:.1f}s) ✅ PASS", state="complete")
                 else:
                     status.update(label=f"🔍 Step 3/4 — Verifier Agent ({elapsed:.1f}s) ❌ FAIL", state="complete")
                 
-                st.markdown(verification)
+                st.markdown(verification_display)
                 with st.expander("🔍 View Raw Verifier Output", expanded=False):
-                    st.code(repr(raw_verifier), language="python")
+                    st.code(verification_raw, language="json" if "verification" in v_data else "text")
             except Exception as e:
                 status.update(label=f"🔍 Step 3/4 — Verifier Agent (FAILED){retry_label}", state="error")
                 st.error(f"Verifier error: {e}")
@@ -223,36 +343,45 @@ if should_run and query:
         elif attempt < MAX_RETRIES:
             st.warning(f"⚠️ Verification failed. Retrying... (Attempt {attempt + 2}/{MAX_RETRIES + 1})")
         else:
-            st.warning(f"⚠️ Maximum retries ({MAX_RETRIES}) reached. Proceeding to Responder Agent.")
+            st.warning(f"⚠️ Maximum retries ({MAX_RETRIES}) reached. Using partial data fallback.")
 
     # ── Step 4: Responder ──
     with st.status("💬 Step 4/4 — Responder Agent formatting final response...", expanded=True) as status:
         start = time.time()
         try:
+            # Use partial data fallback if verification failed after all retries
+            if not verification_passed:
+                result_for_responder = get_partial_data(result, query)
+            else:
+                result_for_responder = result
+            
             responder_input = (
                 f"Original User Query: {query}\n\n"
-                f"Verified Response:\n{result}\n\n"
-                f"Verification Notes:\n{verification}\n\n"
+                f"Response:\n{result_for_responder}\n\n"
+                f"Verification: {'PASSED' if verification_passed else 'PARTIAL DATA'}\n\n"
                 f"Please provide a polished, user-friendly final response."
             )
             responder_response = responder.run(responder_input)
             final_response = responder_response.content
-            raw_responder = responder_response
             elapsed = time.time() - start
             status.update(label=f"💬 Step 4/4 — Responder Agent ({elapsed:.1f}s)", state="complete")
             st.markdown(final_response)
             with st.expander("🔍 View Raw Responder Output", expanded=False):
-                st.code(repr(raw_responder), language="python")
+                st.code(responder_response.content, language="text")
         except Exception as e:
             status.update(label="💬 Step 4/4 — Responder Agent (FAILED)", state="error")
             st.error(f"Responder error: {e}")
-            st.stop()
+            # Graceful fallback: show partial data directly
+            final_response = get_partial_data(result, query)
+            st.markdown(final_response)
 
     # ── Final Response ──
     st.divider()
     st.subheader("🎯 Final Response")
-    if retry_count > 0:
-        st.caption(f"ℹ️ Required {retry_count} retry(ies) before verification passed." if verification_passed else f"ℹ️ Required {retry_count} retry(ies). Max retries reached.")
+    if not verification_passed:
+        st.caption("⚠️ Response includes partial data that could not be fully verified.")
+    elif retry_count > 0:
+        st.caption(f"ℹ️ Required {retry_count} retry(ies) before verification passed.")
     st.markdown(final_response)
 
 elif should_run and not query:

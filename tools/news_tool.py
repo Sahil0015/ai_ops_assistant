@@ -1,67 +1,45 @@
-"""
-News Tool.
-Fetches latest news headlines using the NewsData.io API.
-"""
+"""News Tool - Fetches latest news using NewsData.io API with retry logic."""
 
 import os
-import requests
+from tools.retry_utils import safe_api_call
 
 
 def get_news(topic: str) -> str:
-    """
-    Get the latest news headlines on a given topic using NewsData.io.
-
-    Args:
-        topic: The topic to search news for.
-
-    Returns:
-        A string with the latest news headlines on the topic.
-    """
+    """Get latest news headlines on a topic with retry on API failure."""
     api_key = os.getenv("NEWS_API_KEY")
     if not api_key:
-        return "Error: NEWS_API_KEY environment variable is not set."
+        return "Error: NEWS_API_KEY not set."
+
+    response, error = safe_api_call(
+        "https://newsdata.io/api/1/latest",
+        params={"apikey": api_key, "q": topic, "language": "en"},
+        timeout=15
+    )
+    
+    if error:
+        return f"Error fetching news for '{topic}': {error}"
+    if response.status_code == 401:
+        return "Error: Invalid NewsData.io API key."
 
     try:
-        url = "https://newsdata.io/api/1/latest"
-        params = {
-            "apikey": api_key,
-            "q": topic,
-            "language": "en",
-        }
-        response = requests.get(url, params=params, timeout=15)
-
-        if response.status_code == 401:
-            return "Error: Invalid NewsData.io API key."
-
-        response.raise_for_status()
         data = response.json()
-
         if data.get("status") != "success":
-            msg = data.get("results", {}).get("message", "Unknown error")
-            return f"NewsData.io error: {msg}"
+            return f"NewsData.io error: {data.get('results', {}).get('message', 'Unknown')}"
 
         articles = data.get("results", [])
         if not articles:
-            return f"No news articles found for '{topic}'."
+            return f"No news found for '{topic}'."
 
         headlines = []
-        for i, article in enumerate(articles[:5], 1):
-            title = article.get("title", "No title")
-            source = article.get("source_id", "Unknown source")
-            pub_date = article.get("pubDate", "Unknown date")
-            link = article.get("link", "")
-            description = article.get("description", "")
-            if description and len(description) > 120:
-                description = description[:120] + "..."
+        for i, a in enumerate(articles[:5], 1):
+            desc = a.get("description", "")
+            if desc and len(desc) > 120:
+                desc = desc[:120] + "..."
             headlines.append(
-                f"  {i}. {title}\n"
-                f"     Source: {source} | Date: {pub_date}"
-                + (f"\n     Summary: {description}" if description else "")
+                f"  {i}. {a.get('title', 'No title')}\n"
+                f"     Source: {a.get('source_id', '?')} | {a.get('pubDate', '?')}"
+                + (f"\n     Summary: {desc}" if desc else "")
             )
-
         return f"Top News for '{topic}':\n" + "\n".join(headlines)
-
-    except requests.RequestException as e:
-        return f"Error fetching news for '{topic}': {e}"
     except Exception as e:
         return f"Error parsing news for '{topic}': {e}"
