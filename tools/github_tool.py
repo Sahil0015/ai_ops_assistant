@@ -15,6 +15,33 @@ def _get_headers() -> dict:
     return headers
 
 
+def _fetch_readme(owner: str, repo: str, max_length: int = 1500) -> str | None:
+    """
+    Fetch the decoded README content for a repository.
+
+    Args:
+        owner: The repository owner.
+        repo: The repository name.
+        max_length: Maximum characters to include (default 1500).
+
+    Returns:
+        The README text (truncated if needed), or None if unavailable.
+    """
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/readme"
+        response = requests.get(url, headers={**_get_headers(), "Accept": "application/vnd.github.v3.raw"}, timeout=10)
+        if response.status_code != 200:
+            return None
+        content = response.text.strip()
+        if not content:
+            return None
+        if len(content) > max_length:
+            content = content[:max_length] + "\n... (truncated)"
+        return content
+    except requests.RequestException:
+        return None
+
+
 def get_github_user(username: str) -> str:
     """
     Get the GitHub profile information for a given username.
@@ -46,7 +73,7 @@ def get_github_user(username: str) -> str:
         profile_url = data.get("html_url", "N/A")
         created_at = data.get("created_at", "N/A")
 
-        return (
+        profile = (
             f"GitHub Profile for @{username}:\n"
             f"  Name        : {name}\n"
             f"  Bio         : {bio}\n"
@@ -59,6 +86,13 @@ def get_github_user(username: str) -> str:
             f"  Profile URL : {profile_url}\n"
             f"  Joined      : {created_at}"
         )
+
+        # Enrich with the user's profile README (username/username repo)
+        readme = _fetch_readme(username, username)
+        if readme:
+            profile += f"\n\n--- Profile README ---\n{readme}"
+
+        return profile
     except requests.RequestException as e:
         return f"Error fetching GitHub profile for '{username}': {e}"
 
@@ -175,7 +209,7 @@ def get_github_repo(owner: str, repo: str) -> str:
         updated_at = data.get("updated_at", "N/A")
         default_branch = data.get("default_branch", "N/A")
 
-        return (
+        repo_info = (
             f"GitHub Repository: {full_name}\n"
             f"  Description   : {description}\n"
             f"  ⭐ Stars      : {stars:,}\n"
@@ -190,5 +224,12 @@ def get_github_repo(owner: str, repo: str) -> str:
             f"  🔄 Updated    : {updated_at}\n"
             f"  🔗 URL        : {html_url}"
         )
+
+        # Enrich with the repository's README
+        readme = _fetch_readme(owner, repo)
+        if readme:
+            repo_info += f"\n\n--- Repository README ---\n{readme}"
+
+        return repo_info
     except requests.RequestException as e:
         return f"Error fetching repository '{owner}/{repo}': {e}"

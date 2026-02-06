@@ -81,6 +81,8 @@ with st.sidebar:
     st.header("💡 Example Queries")
     st.caption("Click to run automatically")
     examples = [
+        "Tell me about GitHub user @Sahil0015",
+        "Tell me about the GitHub Repo https://github.com/Sahil0015/ai_ops_assistant",
         "Tell me about GitHub user torvalds",
         "Get info about the facebook/react repository",
         "Search for machine learning repos on GitHub",
